@@ -70,6 +70,10 @@ local carouselPos   = 0
 local carouselTarget = 0
 local carouselSpeed  = 8
 
+local countryCarouselPos = 1
+local countryCarouselTarget = 1
+local countryCarouselSpeed = 8
+
 
 ----------------------------------------------------------------
 -- FS helpers
@@ -415,22 +419,8 @@ end
 ----------------------------------------------------------------
 function love.update(dt)
   ----------------------------------------------------------------
-  -- Scroll da lista (países) – igual ao teu
+  -- Spinner
   ----------------------------------------------------------------
-  if forceInstantScroll then
-      scroll = targetScroll
-      forceInstantScroll = false
-  else
-      local diff = targetScroll - scroll
-      local absDiff = math.abs(diff)
-
-      if absDiff > 0.5 then
-          scroll = scroll + diff * (1 - math.pow(0.001, dt))
-      else
-          scroll = targetScroll
-      end
-  end
-
   spinner = spinner + dt * 3
   if debounce > 0 then debounce = debounce - dt end
 
@@ -462,14 +452,14 @@ function love.update(dt)
   end
 
   ----------------------------------------------------------------
-  -- Animação do carrossel (independente do input)
+  -- Animação do carrossel (usado em countries E stations)
   ----------------------------------------------------------------
-  if state == "stations" and #stations > 0 then
-    local n = #stations
+  if (state == "countries" and #countries > 0) or (state == "stations" and #stations > 0) then
+    local n = (state == "countries") and #countries or #stations
     local diff = carouselTarget - carouselPos
 
     if diff ~= 0 then
-      -- ajustar para o caminho mais curto (carrossel circular)
+      -- caminho mais curto no carrossel circular
       if diff >  n/2 then diff = diff - n end
       if diff < -n/2 then diff = diff + n end
 
@@ -505,7 +495,9 @@ function love.update(dt)
       debounce = 0.25
       if menuIndex == 1 then
         state = "countries"
-        sel, scroll = 1, 0
+        -- inicializar carrossel de países
+        carouselPos    = 1.0
+        carouselTarget = 1.0
         load_countries()
 
       elseif menuIndex == 4 then
@@ -519,40 +511,49 @@ function love.update(dt)
   end
 
   ----------------------------------------------------------------
-  -- COUNTRIES
+  -- COUNTRIES – CARROSSEL HORIZONTAL
   ----------------------------------------------------------------
   if state == "countries" then
 
-    if joy:isGamepadDown("dpdown") then 
-      moveSelection(1, #countries)
-      debounce = 0.12 
-    end
+    local n = #countries
+    if n > 0 then
+      -- mover para o país seguinte (cards deslizam para a esquerda)
+      if joy:isGamepadDown("dpright") then
+        carouselTarget = carouselTarget + 1
+        if carouselTarget > n then carouselTarget = 1 end
+        debounce = 0.18
 
-    if joy:isGamepadDown("dpup") then 
-      moveSelection(-1, #countries)
-      debounce = 0.12 
-    end
+      -- mover para o país anterior (cards deslizam para a direita)
+      elseif joy:isGamepadDown("dpleft") then
+        carouselTarget = carouselTarget - 1
+        if carouselTarget < 1 then carouselTarget = n end
+        debounce = 0.18
+      end
 
-    if joy:isGamepadDown(btnOK) and countries[sel] then
-      debounce = 0.18
-      currentCountry = countries[sel]
-      sel, scroll = 1, 0
-      targetScroll = 0
-      forceInstantScroll = true
+      -- ENTER / abrir rádios do país
+      if joy:isGamepadDown(btnOK) then
+        debounce = 0.2
+        -- índice do país atualmente centrado
+        local selIndex = math.floor(carouselPos + 0.5)
+        if selIndex < 1 then selIndex = 1 end
+        if selIndex > n then selIndex = n end
 
-      if load_stations(currentCountry.code) then
-        state = "stations"
-        -- inicializar carrossel para a primeira estação
-        carouselPos    = 1.0
-        carouselTarget = 1.0
-      else
-        loadingMsg = "Sem ligação e sem cache."
+        currentCountry = countries[selIndex]
+
+        -- ao entrar em stations, inicializar carrossel de rádios
+        if load_stations(currentCountry.code) then
+          state = "stations"
+          carouselPos    = 1.0
+          carouselTarget = 1.0
+        else
+          loadingMsg = "Sem ligação e sem cache."
+        end
       end
     end
 
+    -- VOLTAR ao menu
     if joy:isGamepadDown(btnSelect) then
       debounce = 0.2
-      sel, scroll = 1, 0
       state = "menu"
     end
 
@@ -561,17 +562,18 @@ function love.update(dt)
   ----------------------------------------------------------------
   elseif state == "stations" then
 
-    if #stations > 0 then
+    local n = #stations
+    if n > 0 then
       -- mover para a estação seguinte (cards deslizam para a esquerda)
       if joy:isGamepadDown("dpright") then
         carouselTarget = carouselTarget + 1
-        if carouselTarget > #stations then carouselTarget = 1 end
+        if carouselTarget > n then carouselTarget = 1 end
         debounce = 0.18
 
       -- mover para a estação anterior (cards deslizam para a direita)
       elseif joy:isGamepadDown("dpleft") then
         carouselTarget = carouselTarget - 1
-        if carouselTarget < 1 then carouselTarget = #stations end
+        if carouselTarget < 1 then carouselTarget = n end
         debounce = 0.18
       end
 
@@ -580,14 +582,14 @@ function love.update(dt)
         debounce = 0.2
         local selIndex = math.floor(carouselPos + 0.5)
         if selIndex < 1 then selIndex = 1 end
-        if selIndex > #stations then selIndex = #stations end
+        if selIndex > n then selIndex = n end
         currentStation = stations[selIndex]
         startPlayer(currentStation.url)
         state = "player"
       end
     end
 
-    -- VOLTAR
+    -- VOLTAR → países (mantém posição anterior do carrossel de países)
     if joy:isGamepadDown(btnSelect) then
       debounce = 0.2
       state = "countries"
@@ -670,148 +672,207 @@ function love.draw()
   end
 
   -------------------------------------------------------
-  -- COUNTRIES LIST
+  -- COUNTRIES – CARROSSEL HORIZONTAL
   -------------------------------------------------------
+  -------------------------------------------------------
+-- COUNTRIES – CARROSSEL HORIZONTAL (FIXED)
+-------------------------------------------------------
   if state == "countries" then
 
-    drawHeader("Choose a Country", "Top 40 by station count • A–Z")
-    drawListBackground()
-    love.graphics.setScissor(listArea.x, listArea.y, listArea.w, listArea.h)
-    love.graphics.setFont(fItem)
+      drawHeader("Choose a Country", "Top 40 by station count • A–Z")
 
-    local startIndex = math.max(1, math.floor(scroll/rowH)+1)
-    local endIndex   = math.min(#countries, startIndex + math.floor(listArea.h/rowH) + 1)
+      local centerX = W/2
+      local centerY = H/2 + 10
+      local cardW, cardH = 210, 160
+      local spacing = 230
+      local n = #countries
 
-    for i=startIndex, endIndex do
-      local c = countries[i]
-      local y = (listArea.y + (i-1)*rowH) - scroll
-      local selected = (i == sel)
-
-      love.graphics.setColor(selected and {0.914,0.769,0.416,0.95} 
-                                     or {0.957,0.635,0.380,0.85})
-
-      love.graphics.rectangle("fill", listArea.x+2, y+2, listArea.w-4, rowH-4, 8,8)
-
-      drawFlagOrPlaceholder(c.name, c.code, listArea.x+10, y+8, 64, rowH-16)
-
-      love.graphics.setColor(1,1,1)
-      love.graphics.print(c.name, listArea.x+10+64+12, y + rowH/2 - 8)
-
-      if c.code and #c.code>0 then
-        love.graphics.setFont(fSmall)
-        love.graphics.setColor(0.85,0.85,0.9)
-        love.graphics.print(c.code, listArea.x + listArea.w - 48, y + rowH/2 - 6)
-        love.graphics.setFont(fItem)
+      if n == 0 then
+          love.graphics.setFont(fItem)
+          love.graphics.setColor(1,1,1)
+          love.graphics.printf("Sem países disponíveis.", 0, H/2, W, "center")
+          return
       end
-    end
 
-    love.graphics.setScissor()
-    drawScrollBar(#countries)
-    return
+      for i = 1, n do
+          -- índice circular garantido (nunca desaparece)
+          local idx = i
+
+          -- cálculo relativo CORRIGIDO
+          local rel = ((i - carouselPos + n/2) % n) - n/2
+
+          -- ignorar apenas os que estão muito longe
+          if math.abs(rel) <= 2.5 then
+
+              -- SCALE SUAVE (zoom)
+              local dist  = math.min(1, math.abs(rel))
+              local scale = 1 - dist * 0.35
+
+              local x = centerX + rel * spacing
+              local y = centerY
+
+              -- cartão central destacado
+              if math.abs(rel) < 0.3 then
+                  love.graphics.setColor(0.20, 0.16, 0.25, 0.90)
+              else
+                  love.graphics.setColor(0.12, 0.12, 0.15, 0.85)
+              end
+
+              love.graphics.rectangle(
+                  "fill",
+                  x - (cardW*scale)/2,
+                  y - (cardH*scale)/2,
+                  cardW*scale,
+                  cardH*scale,
+                  14, 14
+              )
+
+              local c = countries[idx]
+
+              -- bandeira
+              drawFlagOrPlaceholder(
+                  c.name,
+                  c.code,
+                  x - 48*scale,
+                  y - 60*scale,
+                  96*scale,
+                  64*scale
+              )
+
+              -- nome
+              love.graphics.setColor(1,1,1)
+              love.graphics.setFont(fItem)
+              love.graphics.printf(
+                  c.name or "N/A",
+                  x - 90*scale,
+                  y + 10*scale,
+                  180*scale,
+                  "center"
+              )
+
+              -- código ISO
+              love.graphics.setFont(fSmall)
+              love.graphics.setColor(0.85,0.85,0.9)
+              love.graphics.printf(
+                  c.code or "",
+                  x - 90*scale,
+                  y + 40*scale,
+                  180*scale,
+                  "center"
+              )
+          end
+      end
+
+      love.graphics.setFont(fSmall)
+      love.graphics.setColor(0.85,0.85,0.9)
+      love.graphics.printf("← / → navegar  •  A abrir rádios  •  B voltar", 0, H-26, W, "center")
+      return
   end
+
 
   -------------------------------------------------------
   -- STATIONS – CARROSSEL HORIZONTAL COM ZOOM SUAVE
   -------------------------------------------------------
-  if state == "stations" then
+  -------------------------------------------------------
+-- STATIONS – CARROSSEL HORIZONTAL COM LOOP INFINITO
+-------------------------------------------------------
+    if state == "stations" then
 
-    drawHeader(
-      string.format("Stations – %s (%s)", currentCountry.name or "?", currentCountry.code or ""),
-      "Top 10 por popularidade"
-    )
+      drawHeader(
+        string.format("Stations – %s (%s)", currentCountry.name or "?", currentCountry.code or "" ),
+        "Top 10 por popularidade"
+      )
 
-    local centerX = W/2
-    local centerY = H/2 + 10
-    local cardW, cardH = 210, 210
-    local spacing = 230
-    local n = #stations
+      local centerX = W/2
+      local centerY = H/2 + 10
+      local cardW, cardH = 210, 210
+      local spacing = 230
+      local n = #stations
 
-    if n == 0 then
-      love.graphics.setFont(fItem)
-      love.graphics.setColor(1,1,1)
-      love.graphics.printf("Sem rádios disponíveis.", 0, H/2, W, "center")
-      return
-    end
-
-    -----------------------------------------
-    -- DESENHO DO CARROSSEL
-    -----------------------------------------
-    for offset = -2, 2 do
-      local idx = carouselIndex + offset
-
-      -- loop circular
-      if idx < 1 then idx = idx + n end
-      if idx > n then idx = idx - n end
-
-      local s = stations[idx]
-
-      -- posição relativa com base na animação
-      local rel = offset + (carouselPos - math.floor(carouselPos))
-
-      -- ignorar fora da área
-      if math.abs(rel) <= 2.5 then
-
-        -- SCALE SUAVE (zoom)
-        local dist = math.min(1, math.abs(rel))  -- 0..1
-        local scale = 1 - dist * 0.35            -- 1 → 0.65
-
-        local x = centerX + rel * spacing
-        local y = centerY
-
-        -- cartão central mais destacado
-        if math.abs(rel) < 0.3 then
-          love.graphics.setColor(0.20, 0.16, 0.25, 0.90)
-        else
-          love.graphics.setColor(0.12, 0.12, 0.15, 0.85)
-        end
-
-        love.graphics.rectangle(
-          "fill",
-          x - (cardW*scale)/2,
-          y - (cardH*scale)/2,
-          cardW*scale,
-          cardH*scale,
-          14, 14
-        )
-
-        -- ícone/radio
-        drawFaviconOrPlaceholder(
-          s.favicon,
-          x - 32*scale,
-          y - 70*scale,
-          64*scale,
-          64*scale
-        )
-
-        -- nome
-        love.graphics.setColor(1,1,1)
+      if n == 0 then
         love.graphics.setFont(fItem)
-        love.graphics.printf(
-          s.name,
-          x - 90*scale,
-          y + 5*scale,
-          180*scale,
-          "center"
-        )
-
-        -- metadata
-        love.graphics.setFont(fSmall)
-        love.graphics.setColor(0.85,0.85,0.9)
-        love.graphics.printf(
-          string.format("%s • %dkbps", s.codec, s.bitrate),
-          x - 90*scale,
-          y + 40*scale,
-          180*scale,
-          "center"
-        )
+        love.graphics.setColor(1,1,1)
+        love.graphics.printf("Sem rádios disponíveis.", 0, H/2, W, "center")
+        return
       end
-    end
 
-    love.graphics.setFont(fSmall)
-    love.graphics.setColor(0.85,0.85,0.9)
-    love.graphics.printf("← / → navegar  •  A tocar  •  B voltar", 0, H-26, W, "center")
-    return
+      -- DESENHO DO CARROSSEL (COM WRAP CORRIGIDO)
+      for i = 1, n do
+
+          local s = stations[i]
+
+          -- scroll infinito
+          local rel = ((i - carouselPos + n/2) % n) - n/2
+
+          if math.abs(rel) <= 2.5 then
+
+              -- SCALE SUAVE
+              local dist  = math.min(1, math.abs(rel))
+              local scale = 1 - dist * 0.35
+
+              local x = centerX + rel * spacing
+              local y = centerY
+
+              -- Destaque do cartão central
+              if math.abs(rel) < 0.3 then
+                  love.graphics.setColor(0.20,0.16,0.25,0.90)
+              else
+                  love.graphics.setColor(0.12,0.12,0.15,0.85)
+              end
+
+              love.graphics.rectangle(
+                  "fill",
+                  x - (cardW*scale)/2,
+                  y - (cardH*scale)/2,
+                  cardW*scale,
+                  cardH*scale,
+                  14, 14
+              )
+
+              -- favicon
+              drawFaviconOrPlaceholder(
+                s.favicon,
+                x - 32*scale,
+                y - 70*scale,
+                64*scale,
+                64*scale
+              )
+
+              ------------------------------------------------------
+              -- 💡 MOSTRAR NOME E QUALIDADE APENAS NO ITEM CENTRAL
+              ------------------------------------------------------
+              if math.abs(rel) < 0.3 then
+                  -- nome da rádio
+                  love.graphics.setColor(1,1,1)
+                  love.graphics.setFont(fItem)
+                  love.graphics.printf(
+                      s.name,
+                      x - 90*scale,
+                      y + 5*scale,
+                      180*scale,
+                      "center"
+                  )
+
+                  -- bitrate + codec
+                  love.graphics.setFont(fSmall)
+                  love.graphics.setColor(0.85,0.85,0.9)
+                  love.graphics.printf(
+                      string.format("%s • %dkbps", s.codec, s.bitrate),
+                      x - 90*scale,
+                      y + 40*scale,
+                      180*scale,
+                      "center"
+                  )
+              end
+          end
+      end
+
+      love.graphics.setFont(fSmall)
+      love.graphics.setColor(0.85,0.85,0.9)
+      love.graphics.printf("← / → navegar  •  A tocar  •  B voltar", 0, H-26, W, "center")
+      return
   end
+
 
   -------------------------------------------------------
   -- PLAYER
@@ -877,6 +938,7 @@ function love.draw()
     love.graphics.printf("A Play/Pause  •  B voltar", 0, H-26, W, "center")
   end
 end
+
 
 
 
