@@ -36,9 +36,6 @@ local currentCountry, currentStation = nil, nil
 local pid, player_process = nil, nil
 local isPlaying, isBuffering, bufferTimer = false, false, 0
 
--- brightness
-local brightness = 100
-
 -- fonts
 local fTitle, fItem, fSmall
 
@@ -67,6 +64,13 @@ for i = 1, eqNumBars do
     }
 end
 
+
+local carouselIndex = 1
+local carouselPos   = 0
+local carouselTarget = 0
+local carouselSpeed  = 8
+
+
 ----------------------------------------------------------------
 -- FS helpers
 ----------------------------------------------------------------
@@ -80,7 +84,7 @@ local function ensure_dirs()
   love.filesystem.createDirectory("flags/favicons")
 end
 
-local function detectOS()
+function detectOS()
     local handle = io.popen("cat /etc/os-release 2>/dev/null")
     if not handle then
         return "unknown"
@@ -89,6 +93,7 @@ local function detectOS()
     local result = handle:read("*a") or ""
     handle:close()
 
+    -- Normaliza para minúsculas para facilitar
     local text = result:lower()
 
     if text:find("knulli") then
@@ -104,10 +109,10 @@ local function detectOS()
     return "unknown"
 end
 
-local currentOS = detectOS()
+local currentOS = detectOS()   -- usa a função que já te dei
 
-local btnOK = "a"
-local btnSelect = "b"
+-- Define o botão de OK conforme o OS
+local btnOK = "a"   -- valor por defeito
 
 if currentOS == "knulli" then
     btnOK = "b"
@@ -116,6 +121,7 @@ elseif currentOS == "muos" then
     btnOK = "a"
     btnSelect = "b"
 end
+
 
 ----------------------------------------------------------------
 -- HTTP: LuaSocket first; curl fallback
@@ -236,6 +242,8 @@ local function drawFaviconOrPlaceholder(url, x, y, w, h)
   end
 end
 
+
+
 ----------------------------------------------------------------
 -- List helpers
 ----------------------------------------------------------------
@@ -254,24 +262,6 @@ end
 local function moveSelection(delta, size)
   sel = math.max(1, math.min(size, sel + delta))
   ensureVisible()
-end
-
-local function updateScroll(dt)
-  if forceInstantScroll then
-    scroll = targetScroll
-    forceInstantScroll = false
-    return
-  end
-
-  local diff = targetScroll - scroll
-  local absDiff = math.abs(diff)
-
-  if absDiff > 0.5 then
-    local factor = (1 - math.pow(0.001, dt))
-    scroll = scroll + diff * factor
-  else
-    scroll = targetScroll
-  end
 end
 
 ----------------------------------------------------------------
@@ -408,6 +398,7 @@ function love.load()
   local joys = love.joystick.getJoysticks()
   if #joys > 0 then joy = joys[1] end
 
+  -- Carregar imagens do menu
   for i, path in ipairs(menuFiles) do
     if love.filesystem.getInfo(path) then
       menuImages[i] = love.graphics.newImage(path)
@@ -423,41 +414,93 @@ end
 -- LOVE: UPDATE
 ----------------------------------------------------------------
 function love.update(dt)
-  updateScroll(dt)
+  ----------------------------------------------------------------
+  -- Scroll da lista (países) – igual ao teu
+  ----------------------------------------------------------------
+  if forceInstantScroll then
+      scroll = targetScroll
+      forceInstantScroll = false
+  else
+      local diff = targetScroll - scroll
+      local absDiff = math.abs(diff)
+
+      if absDiff > 0.5 then
+          scroll = scroll + diff * (1 - math.pow(0.001, dt))
+      else
+          scroll = targetScroll
+      end
+  end
 
   spinner = spinner + dt * 3
   if debounce > 0 then debounce = debounce - dt end
 
+  ----------------------------------------------------------------
+  -- Buffering / Player
+  ----------------------------------------------------------------
   if isBuffering then
     bufferTimer = bufferTimer + dt
-    if bufferTimer > 2.0 then isBuffering=false; isPlaying=true end
-  end
-
-  if state == "player" then
-    if isPlaying or isBuffering then
-        eqTime = eqTime + dt
-        for i = 1, eqNumBars do
-            eqBars[i].h = 15 + math.abs(math.sin(eqTime * eqBars[i].speed + eqBars[i].phase)) * 40
-        end
-    else
-        for i = 1, eqNumBars do
-            eqBars[i].h = 8
-        end
+    if bufferTimer > 2.0 then
+      isBuffering = false
+      isPlaying   = true
     end
   end
 
+  ----------------------------------------------------------------
+  -- Equalizer sempre visível no player
+  ----------------------------------------------------------------
+  if state == "player" then
+    if isPlaying or isBuffering then
+      eqTime = eqTime + dt
+      for i = 1, eqNumBars do
+        eqBars[i].h = 15 + math.abs(math.sin(eqTime * eqBars[i].speed + eqBars[i].phase)) * 40
+      end
+    else
+      for i = 1, eqNumBars do
+        eqBars[i].h = 8
+      end
+    end
+  end
+
+  ----------------------------------------------------------------
+  -- Animação do carrossel (independente do input)
+  ----------------------------------------------------------------
+  if state == "stations" and #stations > 0 then
+    local n = #stations
+    local diff = carouselTarget - carouselPos
+
+    if diff ~= 0 then
+      -- ajustar para o caminho mais curto (carrossel circular)
+      if diff >  n/2 then diff = diff - n end
+      if diff < -n/2 then diff = diff + n end
+
+      local step = diff * math.min(1, dt * carouselSpeed)
+      carouselPos = carouselPos + step
+
+      if math.abs(diff) < 0.001 then
+        carouselPos = carouselTarget
+      end
+    end
+  end
+
+  ----------------------------------------------------------------
+  -- Se não há joystick, se está em debounce ou loading → sai
+  ----------------------------------------------------------------
   if not joy or debounce > 0 or loading then return end
 
-  -- === MENU STATE ===
+  ----------------------------------------------------------------
+  -- MENU PRINCIPAL
+  ----------------------------------------------------------------
   if state == "menu" then
     if joy:isGamepadDown("dpright") then
       menuIndex = menuIndex + 1
       if menuIndex > #menuImages then menuIndex = 1 end
       debounce = 0.2
+
     elseif joy:isGamepadDown("dpleft") then
       menuIndex = menuIndex - 1
       if menuIndex < 1 then menuIndex = #menuImages end
       debounce = 0.2
+
     elseif joy:isGamepadDown(btnOK) then
       debounce = 0.25
       if menuIndex == 1 then
@@ -475,7 +518,9 @@ function love.update(dt)
     return
   end
 
-  -- === COUNTRIES ===
+  ----------------------------------------------------------------
+  -- COUNTRIES
+  ----------------------------------------------------------------
   if state == "countries" then
 
     if joy:isGamepadDown("dpdown") then 
@@ -497,6 +542,9 @@ function love.update(dt)
 
       if load_stations(currentCountry.code) then
         state = "stations"
+        -- inicializar carrossel para a primeira estação
+        carouselPos    = 1.0
+        carouselTarget = 1.0
       else
         loadingMsg = "Sem ligação e sem cache."
       end
@@ -508,33 +556,46 @@ function love.update(dt)
       state = "menu"
     end
 
-
+  ----------------------------------------------------------------
+  -- STATIONS – CARROSSEL HORIZONTAL
+  ----------------------------------------------------------------
   elseif state == "stations" then
 
-    if joy:isGamepadDown("dpdown") then 
-      moveSelection(1, #stations)
-      debounce = 0.12 
+    if #stations > 0 then
+      -- mover para a estação seguinte (cards deslizam para a esquerda)
+      if joy:isGamepadDown("dpright") then
+        carouselTarget = carouselTarget + 1
+        if carouselTarget > #stations then carouselTarget = 1 end
+        debounce = 0.18
+
+      -- mover para a estação anterior (cards deslizam para a direita)
+      elseif joy:isGamepadDown("dpleft") then
+        carouselTarget = carouselTarget - 1
+        if carouselTarget < 1 then carouselTarget = #stations end
+        debounce = 0.18
+      end
+
+      -- ENTER / PLAY
+      if joy:isGamepadDown(btnOK) then
+        debounce = 0.2
+        local selIndex = math.floor(carouselPos + 0.5)
+        if selIndex < 1 then selIndex = 1 end
+        if selIndex > #stations then selIndex = #stations end
+        currentStation = stations[selIndex]
+        startPlayer(currentStation.url)
+        state = "player"
+      end
     end
 
-    if joy:isGamepadDown("dpup") then 
-      moveSelection(-1, #stations)
-      debounce = 0.12 
-    end
-
-    if joy:isGamepadDown(btnOK) and stations[sel] then
-      debounce = 0.2
-      currentStation = stations[sel]
-      startPlayer(currentStation.url)
-      state = "player"
-    end
-
+    -- VOLTAR
     if joy:isGamepadDown(btnSelect) then
       debounce = 0.2
-      sel, scroll = 1, 0
       state = "countries"
     end
 
-
+  ----------------------------------------------------------------
+  -- PLAYER
+  ----------------------------------------------------------------
   elseif state == "player" then
 
     if joy:isGamepadDown(btnOK) then
@@ -552,11 +613,13 @@ function love.update(dt)
       state = "stations"
     end
 
+    -- 🌙 Controlo de brilho via L/R shoulder (só Knulli)
     if joy:isGamepadDown("leftshoulder") then
       debounce = 0.2
       brightness = math.max(0, (brightness or 100) - 10)
       os.execute("knulli-brightness " .. brightness)
       print(string.format("🌑 Brilho: %d%%", brightness))
+
     elseif joy:isGamepadDown("rightshoulder") then
       debounce = 0.2
       brightness = math.min(100, (brightness or 100) + 10)
@@ -566,12 +629,17 @@ function love.update(dt)
   end
 end
 
+
 ----------------------------------------------------------------
 -- LOVE: DRAW
 ----------------------------------------------------------------
 function love.draw()
+  -------------------------------------------------------
+  -- MENU
+  -------------------------------------------------------
   if state == "menu" then
     love.graphics.setBackgroundColor(0.149, 0.275, 0.325)
+
     if menuImages[menuIndex] then
       local img = menuImages[menuIndex]
       local iw, ih = img:getDimensions()
@@ -582,121 +650,236 @@ function love.draw()
       love.graphics.setColor(1,1,1)
       love.graphics.printf("Menu image not found", 0, H/2-10, W, "center")
     end
+
     love.graphics.setFont(fSmall)
     love.graphics.setColor(0.8,0.8,0.9)
     love.graphics.printf("← / → navegar  •  A selecionar", 0, H - 28, W, "center")
     return
   end
 
+  -------------------------------------------------------
+  -- LOADING
+  -------------------------------------------------------
   if loading then
     drawHeader("Carregar…", "")
     drawSpinner(W/2, H/2 - 10, 28)
-    love.graphics.setFont(fItem); love.graphics.setColor(1,1,1)
+    love.graphics.setFont(fItem)
+    love.graphics.setColor(1,1,1)
     love.graphics.printf(loadingMsg or "A carregar…", 0, H/2 + 26, W, "center")
     return
   end
 
+  -------------------------------------------------------
+  -- COUNTRIES LIST
+  -------------------------------------------------------
   if state == "countries" then
+
     drawHeader("Choose a Country", "Top 40 by station count • A–Z")
     drawListBackground()
     love.graphics.setScissor(listArea.x, listArea.y, listArea.w, listArea.h)
     love.graphics.setFont(fItem)
+
     local startIndex = math.max(1, math.floor(scroll/rowH)+1)
     local endIndex   = math.min(#countries, startIndex + math.floor(listArea.h/rowH) + 1)
+
     for i=startIndex, endIndex do
       local c = countries[i]
       local y = (listArea.y + (i-1)*rowH) - scroll
       local selected = (i == sel)
-      love.graphics.setColor(selected and {0.914, 0.769, 0.416, 0.95} or {0.957, 0.635, 0.380, 0.85})
+
+      love.graphics.setColor(selected and {0.914,0.769,0.416,0.95} 
+                                     or {0.957,0.635,0.380,0.85})
+
       love.graphics.rectangle("fill", listArea.x+2, y+2, listArea.w-4, rowH-4, 8,8)
+
       drawFlagOrPlaceholder(c.name, c.code, listArea.x+10, y+8, 64, rowH-16)
+
       love.graphics.setColor(1,1,1)
       love.graphics.print(c.name, listArea.x+10+64+12, y + rowH/2 - 8)
+
       if c.code and #c.code>0 then
-        love.graphics.setFont(fSmall); love.graphics.setColor(0.85,0.85,0.9)
+        love.graphics.setFont(fSmall)
+        love.graphics.setColor(0.85,0.85,0.9)
         love.graphics.print(c.code, listArea.x + listArea.w - 48, y + rowH/2 - 6)
         love.graphics.setFont(fItem)
       end
     end
+
     love.graphics.setScissor()
     drawScrollBar(#countries)
-    love.graphics.setFont(fSmall); love.graphics.setColor(0.85,0.85,0.9)
+    return
+  end
 
-  elseif state == "stations" then
-    local title = string.format("Stations – %s (%s)", currentCountry.name or "?", currentCountry.code or "")
-    drawHeader(title, "Top 10 por popularidade")
-    drawListBackground()
-    love.graphics.setScissor(listArea.x, listArea.y, listArea.w, listArea.h)
-    love.graphics.setFont(fItem)
-    local startIndex = math.max(1, math.floor(scroll/rowH)+1)
-    local endIndex   = math.min(#stations, startIndex + math.floor(listArea.h/rowH) + 1)
-    for i=startIndex, endIndex do
-      local s = stations[i]
-      local y = (listArea.y + (i-1)*rowH) - scroll
-      local selected = (i == sel)
-      love.graphics.setColor(selected and {0.2,0.38,0.62,0.95} or {0.16,0.18,0.22,0.85})
-      love.graphics.rectangle("fill", listArea.x+2, y+2, listArea.w-4, rowH-4, 8,8)
-      drawFaviconOrPlaceholder(s.favicon, listArea.x+10, y+8, 64, rowH-16)
-      love.graphics.setColor(1,1,1)
-      love.graphics.print(s.name or "—", listArea.x+10+64+12, y + 10)
-      love.graphics.setFont(fSmall); love.graphics.setColor(0.85,0.85,0.9)
-      local meta = string.format("%s • %dkbps", s.codec or "N/A", s.bitrate or 0)
-      love.graphics.print(meta, listArea.x+10+64+12, y + 30)
+  -------------------------------------------------------
+  -- STATIONS – CARROSSEL HORIZONTAL COM ZOOM SUAVE
+  -------------------------------------------------------
+  if state == "stations" then
+
+    drawHeader(
+      string.format("Stations – %s (%s)", currentCountry.name or "?", currentCountry.code or ""),
+      "Top 10 por popularidade"
+    )
+
+    local centerX = W/2
+    local centerY = H/2 + 10
+    local cardW, cardH = 210, 210
+    local spacing = 230
+    local n = #stations
+
+    if n == 0 then
       love.graphics.setFont(fItem)
+      love.graphics.setColor(1,1,1)
+      love.graphics.printf("Sem rádios disponíveis.", 0, H/2, W, "center")
+      return
     end
-    love.graphics.setScissor()
-    drawScrollBar(#stations)
-    love.graphics.setFont(fSmall); love.graphics.setColor(0.85,0.85,0.9)
-    love.graphics.printf("D-Pad ↑/↓ navegar  •  A tocar  •  B voltar", 0, H-26, W, "center")
 
-  elseif state == "player" then
-    drawHeader(currentStation and (currentStation.name or "Playing") or "Playing", currentCountry and currentCountry.name or "")
-    local name   = currentStation and (currentStation.name or "N/A") or "N/A"
-    local country= currentCountry and (currentCountry.name or "N/A") or "N/A"
-    local tags   = (currentStation and currentStation.tags and #currentStation.tags>0) and currentStation.tags or "N/A"
-    local bitrate= currentStation and (tonumber(currentStation.bitrate) or 0) or 0
-    local codec  = currentStation and (currentStation.codec or "N/A") or "N/A"
+    -----------------------------------------
+    -- DESENHO DO CARROSSEL
+    -----------------------------------------
+    for offset = -2, 2 do
+      local idx = carouselIndex + offset
+
+      -- loop circular
+      if idx < 1 then idx = idx + n end
+      if idx > n then idx = idx - n end
+
+      local s = stations[idx]
+
+      -- posição relativa com base na animação
+      local rel = offset + (carouselPos - math.floor(carouselPos))
+
+      -- ignorar fora da área
+      if math.abs(rel) <= 2.5 then
+
+        -- SCALE SUAVE (zoom)
+        local dist = math.min(1, math.abs(rel))  -- 0..1
+        local scale = 1 - dist * 0.35            -- 1 → 0.65
+
+        local x = centerX + rel * spacing
+        local y = centerY
+
+        -- cartão central mais destacado
+        if math.abs(rel) < 0.3 then
+          love.graphics.setColor(0.20, 0.16, 0.25, 0.90)
+        else
+          love.graphics.setColor(0.12, 0.12, 0.15, 0.85)
+        end
+
+        love.graphics.rectangle(
+          "fill",
+          x - (cardW*scale)/2,
+          y - (cardH*scale)/2,
+          cardW*scale,
+          cardH*scale,
+          14, 14
+        )
+
+        -- ícone/radio
+        drawFaviconOrPlaceholder(
+          s.favicon,
+          x - 32*scale,
+          y - 70*scale,
+          64*scale,
+          64*scale
+        )
+
+        -- nome
+        love.graphics.setColor(1,1,1)
+        love.graphics.setFont(fItem)
+        love.graphics.printf(
+          s.name,
+          x - 90*scale,
+          y + 5*scale,
+          180*scale,
+          "center"
+        )
+
+        -- metadata
+        love.graphics.setFont(fSmall)
+        love.graphics.setColor(0.85,0.85,0.9)
+        love.graphics.printf(
+          string.format("%s • %dkbps", s.codec, s.bitrate),
+          x - 90*scale,
+          y + 40*scale,
+          180*scale,
+          "center"
+        )
+      end
+    end
+
+    love.graphics.setFont(fSmall)
+    love.graphics.setColor(0.85,0.85,0.9)
+    love.graphics.printf("← / → navegar  •  A tocar  •  B voltar", 0, H-26, W, "center")
+    return
+  end
+
+  -------------------------------------------------------
+  -- PLAYER
+  -------------------------------------------------------
+  if state == "player" then
+
+    drawHeader(
+      currentStation and (currentStation.name or "Playing") or "Playing",
+      currentCountry and currentCountry.name or ""
+    )
+
+    local name   = currentStation.name or "N/A"
+    local country= currentCountry.name or "N/A"
+    local tags   = (currentStation.tags and #currentStation.tags>0) and currentStation.tags or "N/A"
+    local bitrate= tonumber(currentStation.bitrate) or 0
+    local codec  = currentStation.codec or "N/A"
     local qual   = (bitrate>0 and string.format("%d kbps %s", bitrate, codec)) or "N/A"
-    local homepage = currentStation and (currentStation.homepage or "N/A") or "N/A"
-    local votes  = currentStation and (currentStation.votes or 0) or 0
-    local clicks = currentStation and (currentStation.listeners or 0) or 0
-    love.graphics.setFont(fItem); love.graphics.setColor(1,1,1)
+    local homepage = currentStation.homepage or "N/A"
+    local votes  = currentStation.votes or 0
+    local clicks = currentStation.listeners or 0
+
+    love.graphics.setFont(fItem)
+    love.graphics.setColor(1,1,1)
+
     local y = 82
-    local function line(icon, text) love.graphics.printf(icon .. " " .. text, 40, y, W-80, "left"); y = y + 26 end
+    local function line(icon, text)
+      love.graphics.printf(icon .. " " .. text, 40, y, W-80, "left")
+      y = y + 26
+    end
+
     line("🎵", name)
     line("📍", string.format("%s | %s", country, tags))
     line("📡", qual)
     line("🌐", homepage)
     line("❤️", string.format("%d Votes | 🔥 %d listeners", votes, clicks))
+
     y = y + 10
     love.graphics.setFont(fTitle)
+
     if isBuffering then
-      love.graphics.setColor(1,1,1); love.graphics.printf("Buffering…", 0, y, W, "center")
+      love.graphics.setColor(1,1,1)
+      love.graphics.printf("Buffering…", 0, y, W, "center")
     elseif isPlaying then
-      love.graphics.setColor(0.3,0.9,0.3); love.graphics.printf("▶️  Play  (A = Pause)", 0, y, W, "center")
+      love.graphics.setColor(0.3,0.9,0.3)
+      love.graphics.printf("▶️  Play  (A = Pause)", 0, y, W, "center")
     else
-      love.graphics.setColor(0.9,0.3,0.3); love.graphics.printf("⏸️  Pause  (A = Play)", 0, y, W, "center")
+      love.graphics.setColor(0.9,0.3,0.3)
+      love.graphics.printf("⏸️  Pause  (A = Play)", 0, y, W, "center")
     end
 
+    -- Equalizer
     local bx = W/2 - (eqNumBars * 14)/2
     local by = H - 90
 
     for i = 1, eqNumBars do
-        local bar = eqBars[i]
-        love.graphics.setColor(0.3, 0.9, 0.3)
-        love.graphics.rectangle("fill",
-            bx + (i-1)*14,
-            by - bar.h,
-            10,
-            bar.h,
-            3,3
-        )
+      local bar = eqBars[i]
+      love.graphics.setColor(0.3, 0.9, 0.3)
+      love.graphics.rectangle("fill", bx + (i-1)*14, by - bar.h, 10, bar.h, 3,3)
     end
 
-    love.graphics.setFont(fSmall); love.graphics.setColor(0.85,0.85,0.9)
+    love.graphics.setFont(fSmall)
+    love.graphics.setColor(0.85,0.85,0.9)
     love.graphics.printf("A Play/Pause  •  B voltar", 0, H-26, W, "center")
   end
 end
+
+
+
 
 ----------------------------------------------------------------
 -- CLEANUP
